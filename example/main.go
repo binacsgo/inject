@@ -13,28 +13,29 @@ type A interface{}
 type AImpl struct{}
 
 // B interface B
-type B interface{}
+type B interface {
+	Work()
+}
 
 // BImpl implement
 type BImpl struct {
 	Ba A `inject-name:"A"`
 }
 
-func main() {
-	fmt.Println("Example program:")
-	b := initService()
+// Work implement the B interface
+func (b *BImpl) Work() {
 	fmt.Printf("b = %+v, a = %+v\n", b, b.Ba)
 }
 
-func initService() *BImpl {
+func main() {
+	b := initService()
+	b.Work()
+}
+
+func initService() B {
 	b := BImpl{}
-
-	inject.Regist("A", &AImpl{})
 	inject.Regist("B", &b)
-
-	err := inject.DoInject()
-	if err != nil {
-		panic(err.Error())
-	}
+	inject.Regist("A", &AImpl{})
+	inject.DoInject()
 	return &b
 }

@@ -1,7 +1,5 @@
 package inject
 
-import "container/list"
-
 var (
 	strategyMap FieldMatchStrategyMap
 
@@ -12,11 +10,7 @@ func init() {
 	strategyMap = getStrategy()
 	strategyMap[DEFAULT_STRATEGY] = &NameMatchStrategy{}
 
-	globalContainer = &Container{
-		objMap:                make(map[string]*ObjInfo, 16),
-		registList:            list.New(),
-		fieldMatchStrategyMap: strategyMap,
-	}
+	globalContainer = NewContainer()
 }
 
 func getStrategy() FieldMatchStrategyMap {
@@ -33,8 +27,8 @@ func Regist(name string, obj interface{}) {
 }
 
 // DoInject inject to globalContainer
-func DoInject() error {
-	return globalContainer.DoInject()
+func DoInject() {
+	globalContainer.DoInject()
 }
 
 // Report report the globalContainer

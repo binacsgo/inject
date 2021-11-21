@@ -1,8 +1,6 @@
 package inject
 
-import (
-	"fmt"
-)
+import "fmt"
 
 const (
 	FieldMatchStrategy_NameOnly     = "NameOnly"
@@ -14,7 +12,7 @@ const (
 // FieldMatchStrategy Interface
 type FieldMatchStrategy interface {
 	name() string
-	findObjByTFieldInfo(objMap map[string]*ObjInfo, fieldInfo *InjectFieldInfo) (*ObjInfo, error)
+	findObjByTFieldInfo(nameObjMap map[string]*ObjInfo, fieldInfo *InjectFieldInfo) (*ObjInfo, error)
 }
 
 // NameMatchStrategy using name
@@ -24,11 +22,11 @@ func (n *NameMatchStrategy) name() string {
 	return FieldMatchStrategy_NameOnly
 }
 
-func (n *NameMatchStrategy) findObjByTFieldInfo(objMap map[string]*ObjInfo, fieldInfo *InjectFieldInfo) (*ObjInfo, error) {
+func (n *NameMatchStrategy) findObjByTFieldInfo(nameObjMap map[string]*ObjInfo, fieldInfo *InjectFieldInfo) (*ObjInfo, error) {
 	if n == nil {
 		return nil, nil
 	}
-	return objMap[fieldInfo.tag.name], nil
+	return nameObjMap[fieldInfo.tag.injectName], nil
 }
 
 // TypeMatchStrategy using type
@@ -38,12 +36,12 @@ func (t *TypeMatchStrategy) name() string {
 	return FieldMatchStrategy_TypeOnly
 }
 
-func (t *TypeMatchStrategy) findObjByTFieldInfo(objMap map[string]*ObjInfo, fieldInfo *InjectFieldInfo) (*ObjInfo, error) {
+func (t *TypeMatchStrategy) findObjByTFieldInfo(nameObjMap map[string]*ObjInfo, fieldInfo *InjectFieldInfo) (*ObjInfo, error) {
 	var ret *ObjInfo
-	for _, v := range objMap {
+	for _, v := range nameObjMap {
 		if v.objDefination.reflectType.AssignableTo(fieldInfo.reflectType) {
 			if ret != nil {
-				return nil, fmt.Errorf("Multiple match %v %v", ret.name, v.name)
+				return nil, fmt.Errorf("Multiple match %v %v", ret.injectName, v.injectName)
 			}
 			ret = v
 		}
@@ -58,19 +56,15 @@ func (m *MatchStrategyComNameType) name() string {
 	return FieldMatchStrategy_Com_NameType
 }
 
-func (m *MatchStrategyComNameType) findObjByTFieldInfo(objMap map[string]*ObjInfo, fieldInfo *InjectFieldInfo) (*ObjInfo, error) {
-	sty, err := strategyMap.getStrategy(FieldMatchStrategy_NameOnly).findObjByTFieldInfo(objMap, fieldInfo)
+func (m *MatchStrategyComNameType) findObjByTFieldInfo(nameObjMap map[string]*ObjInfo, fieldInfo *InjectFieldInfo) (*ObjInfo, error) {
+	sty, err := strategyMap.getStrategy(FieldMatchStrategy_NameOnly).findObjByTFieldInfo(nameObjMap, fieldInfo)
 	if err != nil {
 		return nil, err
 	}
 	if sty != nil {
 		return sty, nil
 	}
-	sty, err = strategyMap.getStrategy(FieldMatchStrategy_TypeOnly).findObjByTFieldInfo(objMap, fieldInfo)
-	if err != nil {
-		return nil, err
-	}
-	return sty, err
+	return strategyMap.getStrategy(FieldMatchStrategy_TypeOnly).findObjByTFieldInfo(nameObjMap, fieldInfo)
 }
 
 // FieldMatchStrategyMap map
@@ -78,15 +72,15 @@ type FieldMatchStrategyMap map[string]FieldMatchStrategy
 
 func (f FieldMatchStrategyMap) regist(fms FieldMatchStrategy) error {
 	if _, ok := f[fms.name()]; ok {
-		return fmt.Errorf("Strategy named [%v] already exist", fms.name())
+		return fmt.Errorf("Strategy named [%v] already exists", fms.name())
 	}
 	f[fms.name()] = fms
 	return nil
 }
 
 func (f FieldMatchStrategyMap) getStrategy(name string) FieldMatchStrategy {
-	ret := f[name]
-	if ret == nil {
+	ret, ok := f[name]
+	if !ok {
 		return f[DEFAULT_STRATEGY]
 	}
 	return ret

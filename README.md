@@ -9,10 +9,7 @@ Dependency Injection framework written in Go.
     inject.Regist("A", &AImpl{})
     inject.Regist("B", &BImpl{})
     // ... 
-    err := inject.DoInject()
-    if err != nil {
-        panic(err.Error())
-    }
+    inject.DoInject()
 ```
 
 
@@ -102,6 +99,10 @@ type BImpl struct {
 2. 依据不同的策略找到结构体成员所对应的真实 [对象2]
 3. 为 [对象1] 和其结构体成员 [对象2] 执行注入 `doInject` ，注入本质为 `reflectValue.Set()`
 
+**遍历容器有讲究：如果简单地按照 regist 的顺序去遍历，则要求其依赖在当前对象之前 regist 过。**
+
+**通过分析对象依赖关系并建立有向图，判断其是否为一个合法的 <u>有向无环图(DAG)</u> 并依照拓扑序执行注入过程即可以任意顺序执行 regist 。**
+
 ### 3.2 Strategy
 
 3.1.2 中寻找结构体成员所对应的真实对象时所依据的策略，模块分为三种：
@@ -119,17 +120,19 @@ type BImpl struct {
 
 ```go
 type ObjInfo struct {
-    name           string
-    order          int32
+    injectName string
+    order      int64
+    instance   interface{}
+
     objDefination  ObjDefination
     injectComplete bool
-    instance       interface{}
 }
+
 
 type ObjDefination struct {
     reflectType  reflect.Type
     reflectValue reflect.Value
-    injectList   []InjectFieldInfo
+    injectList   []*InjectFieldInfo
 }
 ```
 
@@ -150,3 +153,13 @@ type ObjDefination struct {
 ## 4 TODO
 
 注入优先级
+
+
+
+
+
+## 5 ChangeLog
+
+### 2021-11-21 支持依赖关系检查和拓扑序注入
+
+通过分析对象依赖关系并建立 DAG 随后执行拓扑排序来实现拓扑序注入，从而实现 regist 时无需关心依赖顺序的目的。

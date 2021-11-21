@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"reflect"
 	"sync"
+
+	"github.com/binacsgo/graph"
 )
 
 // BeforeVisitor before visitor
@@ -19,32 +21,58 @@ type AfterVisitor interface {
 
 // Properties todo
 type Properties interface {
-	getValue(key string) string
+	GetPropertiesValue(key string) string
 }
 
 // ObjFactory todo
 type ObjFactory interface {
-	createObj() interface{}
+	CreateObj() interface{}
 }
 
 // Container container of objects
 type Container struct {
-	objMap                map[string]*ObjInfo
-	definationMap         map[reflect.Type]*ObjDefination
+	nameObjMap            map[string]*ObjInfo
+	orderObjMap           map[int64]*ObjInfo
+	definationMap         map[reflect.Type]*ObjDefination // not used yet
 	fieldMatchStrategyMap FieldMatchStrategyMap
 	registList            *list.List
-	order                 int32
-	mutex                 sync.Mutex
+
+	graph *graph.Graph
+	order int64
+	conns int64
+	mutex sync.Mutex
+}
+
+// NewContainer return a container that store all the objects
+func NewContainer() *Container {
+	return &Container{
+		nameObjMap:            make(map[string]*ObjInfo, 16),
+		orderObjMap:           make(map[int64]*ObjInfo, 16),
+		definationMap:         make(map[reflect.Type]*ObjDefination, 16), // not used yet
+		fieldMatchStrategyMap: strategyMap,
+		registList:            list.New(),
+	}
 }
 
 // Regist regist to container
-func (ic *Container) Regist(name string, obj interface{}) {
-	ic.regist(name, obj)
+func (ic *Container) Regist(injectName string, obj interface{}) {
+	if len(injectName) <= 0 || obj == nil {
+		panic(fmt.Errorf("Invalid param: obj=[%v]", obj))
+	}
+	if err := canRegisterCheck(obj); err != nil {
+		panic(fmt.Errorf("Can not pass the canRegisterCheck: err=[%v]", err))
+	}
+
+	if err := ic.regist(injectName, obj); err != nil {
+		panic(fmt.Errorf("Regist failed for [%v]: err=[%v]", injectName, err))
+	}
 }
 
 // DoInject inject to container
-func (ic *Container) DoInject() error {
-	return ic.inject()
+func (ic *Container) DoInject() {
+	if err := ic.inject(); err != nil {
+		panic(fmt.Errorf("DoInject failed: err=[%v]", err))
+	}
 }
 
 // Report report the container
@@ -52,64 +80,70 @@ func (ic *Container) Report() string {
 	return ""
 }
 
-func (ic *Container) regist(name string, obj interface{}) error {
-	if len(name) <= 0 || obj == nil {
-		return fmt.Errorf("invalid Param")
-	}
-	if err := ic.canRegisterCheck(obj); err != nil {
-		fmt.Printf("Object [%s] Regist fail: %s\n", name, err.Error())
-		return err
-	}
+func (ic *Container) regist(injectName string, obj interface{}) error {
 	ic.mutex.Lock()
 	defer ic.mutex.Unlock()
-	if _, ok := ic.objMap[name]; ok {
-		return fmt.Errorf("Object name %s already exist", name)
-	}
-	ic.order++
-	newObj, err := newObjInfo(name, ic.order, obj)
-	if err != nil {
-		return err
-	}
-	ic.registList.PushBack(newObj)
-	ic.objMap[name] = newObj
-	return nil
-}
 
-func (ic *Container) canRegisterCheck(obj interface{}) error {
-	if !isPtr(reflect.TypeOf(obj)) {
-		return fmt.Errorf("Regist just support type ptr")
+	// 1. Check for duplicate registrations
+	if _, ok := ic.nameObjMap[injectName]; ok {
+		return fmt.Errorf("Already exists in nameObjMap")
 	}
+	// 2. Build the ObjInfo
+	newObj, err := newObjInfo(injectName, ic.order, obj)
+	if err != nil {
+		return fmt.Errorf("Can not pass the newObjInfo: err=[%v]", err)
+	}
+	// 3. Update the container
+	{
+		ic.registList.PushBack(newObj)
+		ic.nameObjMap[injectName] = newObj
+		ic.orderObjMap[ic.order] = newObj
+		// [0, order)
+		ic.order += 1
+		ic.conns += int64(len(newObj.objDefination.injectList))
+	}
+
 	return nil
 }
 
 func (ic *Container) inject() error {
 	ic.mutex.Lock()
 	defer ic.mutex.Unlock()
-	pedding := make([]*ObjInfo, 0)
-	elem := ic.registList.Front()
-	for elem != nil {
+
+	ic.graph = graph.NewGraph(ic.order, ic.conns)
+	for elem := ic.registList.Front(); elem != nil; elem = elem.Next() {
 		objInfo := elem.Value.(*ObjInfo)
-		if objInfo.injectComplete {
-			continue
+		objInfoName := objInfo.injectName
+		for i := range objInfo.objDefination.injectList {
+			depObjInfoName := objInfo.objDefination.injectList[i].tag.injectName
+			ic.graph.AddEdge(ic.nameObjMap[objInfoName].order, ic.nameObjMap[depObjInfoName].order, 1)
 		}
-		ic.invokeInjectBefore(objInfo)
+	}
+	topo, ok := graph.Topology(ic.graph)
+	if !ok {
+		return fmt.Errorf("Find circle in graph")
+	}
+
+	pedding := make([]*ObjInfo, 0)
+	for i := len(topo) - 1; i >= 0; i-- {
+		order := topo[i]
+		objInfo := ic.orderObjMap[order]
+		ic.invokeBeforeInject(objInfo)
 		if err := ic.injectFields(objInfo); err != nil {
-			fmt.Printf("Inject fail, objInfo.name=%v\n", objInfo.name)
-			return err
+			return fmt.Errorf("Inject objInfo.injectName[%v] got err=[%v]", objInfo.injectName, err)
 		}
 		pedding = append(pedding, objInfo)
-		elem = elem.Next()
 	}
-	return ic.invokeInjectAfter(pedding)
+	return ic.invokeAfterInject(pedding)
 }
 
-func (ic *Container) invokeInjectBefore(obj *ObjInfo) {
+func (ic *Container) invokeBeforeInject(obj *ObjInfo) {
 	if visitor, ok := obj.instance.(BeforeVisitor); ok {
 		visitor.BeforeInject()
 	}
 }
 
-func (ic *Container) invokeInjectAfter(objList []*ObjInfo) error {
+func (ic *Container) invokeAfterInject(objList []*ObjInfo) error {
 	for _, obj := range objList {
 		if visitor, ok := obj.instance.(AfterVisitor); ok {
 			err := visitor.AfterInject()
@@ -126,64 +160,47 @@ func (ic *Container) injectFields(objInfo *ObjInfo) error {
 	if objInfo.instance == nil {
 		return nil
 	}
-	listlen := len(objInfo.objDefination.injectList)
-	for i := 0; i < listlen; i++ {
-		injectObj, err := ic.findObjByTFieldInfo(&(objInfo.objDefination.injectList[i]))
+	injectListLen := len(objInfo.objDefination.injectList)
+	for i := 0; i < injectListLen; i++ {
+		injectObj, err := ic.findObjByTFieldInfo(objInfo.objDefination.injectList[i])
 		if err != nil {
 			return err
 		}
 		if injectObj != nil {
-			fmt.Printf("Object [%s] Inject field[%s] -> %s\n", objInfo.name, objInfo.objDefination.injectList[i].fieldName, injectObj.name)
-			doInject(&(objInfo.objDefination.injectList[i]), injectObj)
+			fmt.Printf("Object [%v] Inject field[%v] -> [%v]\n", objInfo.injectName, objInfo.objDefination.injectList[i].fieldName, injectObj.injectName)
+			doInject(objInfo.objDefination.injectList[i], injectObj)
 		} else {
 			if objInfo.objDefination.injectList[i].tag.required {
-				fmt.Printf("Object [%s] Inject fail field[%s] -> not found\n", objInfo.name, objInfo.objDefination.injectList[i].fieldName)
-				return fmt.Errorf("Object [%s] Inject fail field[%s] -> not found", objInfo.name, objInfo.objDefination.injectList[i].fieldName)
+				return fmt.Errorf("Object [%v] Inject fail field[%v] -> not found", objInfo.injectName, objInfo.objDefination.injectList[i].fieldName)
 			}
-			fmt.Printf("Object [%s] Inject fail field[%s] -> not found (not required)\n", objInfo.name, objInfo.objDefination.injectList[i].fieldName)
+			fmt.Printf("Object [%v] Inject fail field[%v] -> not found (not required)\n", objInfo.injectName, objInfo.objDefination.injectList[i].fieldName)
 		}
 	}
 	return nil
 }
 
 func (ic *Container) findObjByTFieldInfo(fieldinfo *InjectFieldInfo) (*ObjInfo, error) {
-	depObj, err := ic.fieldMatchStrategyMap.getStrategy(fieldinfo.tag.strategy).findObjByTFieldInfo(ic.objMap, fieldinfo)
+	depObj, err := ic.fieldMatchStrategyMap.getStrategy(fieldinfo.tag.strategy).findObjByTFieldInfo(ic.nameObjMap, fieldinfo)
 	if err != nil {
 		return nil, err
 	}
 	if depObj == nil {
-		return nil, nil
+		// DO NOT return nil, nil
+		return nil, fmt.Errorf("depObj [%v]=nil, this should not happen if we perform injection by topology", fieldinfo.tag.injectName)
 	}
-	if !injectFieldCheck(fieldinfo.reflectType, depObj.objDefination.reflectType) {
-		fmt.Printf("injectFieldCheck fail %v can not inject to %v\n", depObj.objDefination.reflectType, fieldinfo.reflectType)
-		return nil, fmt.Errorf("injectFieldCheck fail %v can not inject to %v", depObj.objDefination.reflectType, fieldinfo.reflectType)
+	if !canInjectCheck(fieldinfo.reflectType, depObj.objDefination.reflectType) {
+		return nil, fmt.Errorf("canInjectCheck fail [%v] can not inject to [%v]", depObj.objDefination.reflectType, fieldinfo.reflectType)
 	}
 	return depObj, nil
 }
 
-func injectFieldCheck(targetType, instanceType reflect.Type) bool {
-	if targetType.Kind() == reflect.Interface {
-		if instanceType.AssignableTo(targetType) {
-			return true
-		}
-		fmt.Printf("%v not AssignableTo %v\n", instanceType.Name(), targetType.Name())
-		return false
-	}
-	if isStructPtr(targetType) {
-		targetRealType := realType(targetType)
-		instanceRealType := realType(instanceType)
-		if instanceRealType.AssignableTo(targetRealType) {
-			return true
-		}
-		fmt.Printf("%v not AssignableTo %v (isStructPtr)\n", instanceType.Name(), targetType.Name())
-		return false
-	}
-	fmt.Printf("injectFieldCheck unknown\n")
-	return false
-}
-
 func doInject(fieldinfo *InjectFieldInfo, objInfo *ObjInfo) {
-	fmt.Printf("doInject fieldName = %s %v %v %v\n", fieldinfo.fieldName, fieldinfo.reflectValue.CanSet(), fieldinfo.reflectValue.Kind(), objInfo.objDefination.reflectType.AssignableTo(fieldinfo.reflectType))
+	fmt.Printf("doInject: fieldName=[%v] CanSet=[%v] Kind=[%v] AssignableTo=[%v]\n",
+		fieldinfo.fieldName,
+		fieldinfo.reflectValue.CanSet(),
+		fieldinfo.reflectValue.Kind(),
+		objInfo.objDefination.reflectType.AssignableTo(fieldinfo.reflectType),
+	)
 	fieldinfo.reflectValue.Set(objInfo.objDefination.reflectValue)
 	fieldinfo.objInfo = objInfo
 }
