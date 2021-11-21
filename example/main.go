@@ -7,14 +7,21 @@ import (
 )
 
 // A interface B
-type A interface{}
+type A interface {
+	Hello()
+}
 
 // AImpl implement
 type AImpl struct{}
 
+// Work implement the B interface
+func (a *AImpl) Hello() {
+	fmt.Printf("Hello I'm A\n")
+}
+
 // B interface B
 type B interface {
-	Work()
+	Hello()
 }
 
 // BImpl implement
@@ -23,13 +30,13 @@ type BImpl struct {
 }
 
 // Work implement the B interface
-func (b *BImpl) Work() {
-	fmt.Printf("b = %+v, a = %+v\n", b, b.Ba)
+func (b *BImpl) Hello() {
+	b.Ba.Hello()
 }
 
 func main() {
 	b := initService()
-	b.Work()
+	b.Hello()
 }
 
 func initService() B {

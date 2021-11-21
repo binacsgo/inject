@@ -47,3 +47,10 @@ func canInjectCheck(targetType, instanceType reflect.Type) bool {
 	fmt.Printf("canInjectCheck unknown\n")
 	return false
 }
+
+func parseInjectTag(tag reflect.StructTag) string {
+	if injectName, foundtag := tag.Lookup(InjectTag_Name); foundtag {
+		return injectName
+	}
+	return ""
+}

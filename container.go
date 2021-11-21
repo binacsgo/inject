@@ -3,39 +3,21 @@ package inject
 import (
 	"container/list"
 	"fmt"
-	"reflect"
 	"sync"
 
 	"github.com/binacsgo/graph"
 )
-
-// BeforeVisitor before visitor
-type BeforeVisitor interface {
-	BeforeInject()
-}
 
 // AfterVisitor after visitor
 type AfterVisitor interface {
 	AfterInject() error
 }
 
-// Properties todo
-type Properties interface {
-	GetPropertiesValue(key string) string
-}
-
-// ObjFactory todo
-type ObjFactory interface {
-	CreateObj() interface{}
-}
-
 // Container container of objects
 type Container struct {
-	nameObjMap            map[string]*ObjInfo
-	orderObjMap           map[int64]*ObjInfo
-	definationMap         map[reflect.Type]*ObjDefination // not used yet
-	fieldMatchStrategyMap FieldMatchStrategyMap
-	registList            *list.List
+	nameObjMap  map[string]*ObjInfo
+	orderObjMap map[int64]*ObjInfo
+	registList  *list.List
 
 	graph *graph.Graph
 	order int64
@@ -46,11 +28,9 @@ type Container struct {
 // NewContainer return a container that store all the objects
 func NewContainer() *Container {
 	return &Container{
-		nameObjMap:            make(map[string]*ObjInfo, 16),
-		orderObjMap:           make(map[int64]*ObjInfo, 16),
-		definationMap:         make(map[reflect.Type]*ObjDefination, 16), // not used yet
-		fieldMatchStrategyMap: strategyMap,
-		registList:            list.New(),
+		nameObjMap:  make(map[string]*ObjInfo, 16),
+		orderObjMap: make(map[int64]*ObjInfo, 16),
+		registList:  list.New(),
 	}
 }
 
@@ -73,11 +53,6 @@ func (ic *Container) DoInject() {
 	if err := ic.inject(); err != nil {
 		panic(fmt.Errorf("DoInject failed: err=[%v]", err))
 	}
-}
-
-// Report report the container
-func (ic *Container) Report() string {
-	return ""
 }
 
 func (ic *Container) regist(injectName string, obj interface{}) error {
@@ -115,7 +90,7 @@ func (ic *Container) inject() error {
 		objInfo := elem.Value.(*ObjInfo)
 		objInfoName := objInfo.injectName
 		for i := range objInfo.objDefination.injectList {
-			depObjInfoName := objInfo.objDefination.injectList[i].tag.injectName
+			depObjInfoName := objInfo.objDefination.injectList[i].injectName
 			ic.graph.AddEdge(ic.nameObjMap[objInfoName].order, ic.nameObjMap[depObjInfoName].order, 1)
 		}
 	}
@@ -128,19 +103,12 @@ func (ic *Container) inject() error {
 	for i := len(topo) - 1; i >= 0; i-- {
 		order := topo[i]
 		objInfo := ic.orderObjMap[order]
-		ic.invokeBeforeInject(objInfo)
 		if err := ic.injectFields(objInfo); err != nil {
 			return fmt.Errorf("Inject objInfo.injectName[%v] got err=[%v]", objInfo.injectName, err)
 		}
 		pedding = append(pedding, objInfo)
 	}
 	return ic.invokeAfterInject(pedding)
-}
-
-func (ic *Container) invokeBeforeInject(obj *ObjInfo) {
-	if visitor, ok := obj.instance.(BeforeVisitor); ok {
-		visitor.BeforeInject()
-	}
 }
 
 func (ic *Container) invokeAfterInject(objList []*ObjInfo) error {
@@ -151,7 +119,6 @@ func (ic *Container) invokeAfterInject(objList []*ObjInfo) error {
 				return err
 			}
 		}
-		obj.injectComplete = true
 	}
 	return nil
 }
@@ -166,27 +133,21 @@ func (ic *Container) injectFields(objInfo *ObjInfo) error {
 		if err != nil {
 			return err
 		}
-		if injectObj != nil {
-			fmt.Printf("Object [%v] Inject field[%v] -> [%v]\n", objInfo.injectName, objInfo.objDefination.injectList[i].fieldName, injectObj.injectName)
-			doInject(objInfo.objDefination.injectList[i], injectObj)
-		} else {
-			if objInfo.objDefination.injectList[i].tag.required {
-				return fmt.Errorf("Object [%v] Inject fail field[%v] -> not found", objInfo.injectName, objInfo.objDefination.injectList[i].fieldName)
-			}
-			fmt.Printf("Object [%v] Inject fail field[%v] -> not found (not required)\n", objInfo.injectName, objInfo.objDefination.injectList[i].fieldName)
+		if injectObj == nil {
+			return fmt.Errorf("Object [%v] Inject fail field[%v] -> not found", objInfo.injectName, objInfo.objDefination.injectList[i].fieldName)
 		}
+
+		fmt.Printf("Object [%v] Inject field[%v] -> [%v]\n", objInfo.injectName, objInfo.objDefination.injectList[i].fieldName, injectObj.injectName)
+		doInject(objInfo.objDefination.injectList[i], injectObj)
 	}
 	return nil
 }
 
 func (ic *Container) findObjByTFieldInfo(fieldinfo *InjectFieldInfo) (*ObjInfo, error) {
-	depObj, err := ic.fieldMatchStrategyMap.getStrategy(fieldinfo.tag.strategy).findObjByTFieldInfo(ic.nameObjMap, fieldinfo)
-	if err != nil {
-		return nil, err
-	}
+	depObj := ic.nameObjMap[fieldinfo.injectName]
 	if depObj == nil {
 		// DO NOT return nil, nil
-		return nil, fmt.Errorf("depObj [%v]=nil, this should not happen if we perform injection by topology", fieldinfo.tag.injectName)
+		return nil, fmt.Errorf("depObj [%v]=nil, this should not happen if we perform injection by topology", fieldinfo.injectName)
 	}
 	if !canInjectCheck(fieldinfo.reflectType, depObj.objDefination.reflectType) {
 		return nil, fmt.Errorf("canInjectCheck fail [%v] can not inject to [%v]", depObj.objDefination.reflectType, fieldinfo.reflectType)
