@@ -1,5 +1,5 @@
 module github.com/binacsgo/inject
 
-go 1.16
+go 1.17
 
-require github.com/binacsgo/graph v0.0.0-20211121034315-55d98084536f
+require github.com/binacsgo/graph v0.0.0-20220604094945-8cd8fcf6f414
